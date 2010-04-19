@@ -5,14 +5,17 @@ Views which allow users to create and activate accounts.
 
 
 from django.conf import settings
-from django.core.urlresolvers import reverse
 from django.http import HttpResponseRedirect
 from django.shortcuts import render_to_response
 from django.template import RequestContext
 
-from registration.forms import RegistrationForm
 from registration.models import RegistrationProfile
+from . import forms
+from apocalypse.my_notes import models as my_notes_models
+from apocalypse.highlights import models as highlights_models
 
+import logging
+logger = logging.getLogger('registration')
 
 def activate(request, activation_key,
              template_name='registration/activate.html',
@@ -62,6 +65,21 @@ def activate(request, activation_key,
     """
     activation_key = activation_key.lower() # Normalize before trying anything with it.
     account = RegistrationProfile.objects.activate_user(activation_key)
+    if account:
+        # Move the anonymous user's stuff over to the new activated account.
+        user = request.user
+        user.get_profile().user = account
+        logger.info('Old user: %s', user)
+        logger.info('New user: %s', account)
+        for note in my_notes_models.PassageNote.objects.filter(user=user):
+            logger.info("Found note: %s", note)
+            note.user = account
+            note.save()
+        for hl in highlights_models.Highlight.objects.filter(user=user):
+            logger.info("Found highlight: %s", hl)
+            hl.user = account
+            hl.save()
+
     if extra_context is None:
         extra_context = {}
     context = RequestContext(request)
@@ -74,7 +92,7 @@ def activate(request, activation_key,
 
 
 def register(request, success_url=None,
-             form_class=RegistrationForm, profile_callback=None,
+             form_class=forms.RegistrationForm, profile_callback=None,
              template_name='registration/registration_form.html',
              extra_context=None):
     """
@@ -142,21 +160,24 @@ def register(request, success_url=None,
     argument.
     
     """
+    context = RequestContext(request)
     if request.method == 'POST':
         form = form_class(data=request.POST, files=request.FILES)
+        form.request = request
         if form.is_valid():
             new_user = form.save(profile_callback=profile_callback)
             # success_url needs to be dynamically generated here; setting a
             # a default value using reverse() will cause circular-import
             # problems with the default URLConf for this application, which
             # imports this file.
-            return HttpResponseRedirect(success_url or reverse('registration_complete'))
+            return render_to_response('registration/registration_complete.html',
+                                      {'email': form.cleaned_data['email'],},
+                                      context_instance=context)
     else:
         form = form_class()
     
     if extra_context is None:
         extra_context = {}
-    context = RequestContext(request)
     for key, value in extra_context.items():
         context[key] = callable(value) and value() or value
     return render_to_response(template_name,

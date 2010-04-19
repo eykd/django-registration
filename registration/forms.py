@@ -3,7 +3,7 @@ Forms and validation code for user registration.
 
 """
 
-
+import uuid
 from django import forms
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.auth.models import User
@@ -17,25 +17,20 @@ from registration.models import RegistrationProfile
 # lands in trunk, this will no longer be necessary.
 attrs_dict = { 'class': 'required' }
 
+def generateUsername():
+    return str(uuid.uuid1()).replace('-', '').decode('hex').encode('base64').replace('=', '').strip()
 
 class RegistrationForm(forms.Form):
-    """
-    Form for registering a new user account.
-    
+    """Form for registering a new user account.
+
     Validates that the requested username is not already in use, and
     requires the password to be entered twice to catch typos.
-    
+
     Subclasses should feel free to add any additional validation they
     need, but should either preserve the base ``save()`` or implement
-    a ``save()`` which accepts the ``profile_callback`` keyword
-    argument and passes it through to
-    ``RegistrationProfile.objects.create_inactive_user()``.
-    
+    a ``save()`` method which returns a ``User``.
+
     """
-    username = forms.RegexField(regex=r'^\w+$',
-                                max_length=30,
-                                widget=forms.TextInput(attrs=attrs_dict),
-                                label=_(u'username'))
     email = forms.EmailField(widget=forms.TextInput(attrs=dict(attrs_dict,
                                                                maxlength=75)),
                              label=_(u'email address'))
@@ -43,61 +38,49 @@ class RegistrationForm(forms.Form):
                                 label=_(u'password'))
     password2 = forms.CharField(widget=forms.PasswordInput(attrs=attrs_dict, render_value=False),
                                 label=_(u'password (again)'))
-    
-    def clean_username(self):
+    tos = forms.BooleanField(widget=forms.CheckboxInput(attrs=attrs_dict),
+                             label=_(u'Terms of Service'),
+                             help_text='<span>I have read and agree to the <a class="tos" href="/about/terms-of-service/?iframe">Terms&nbsp;of&nbsp;Service</a></span>',
+                             error_messages={ 'required': u"You must agree to the terms to register" })
+
+
+    def clean_email(self):
+        """Validate that the supplied email address is unique for the
+        site.
         """
-        Validate that the username is alphanumeric and is not already
-        in use.
-        
-        """
-        try:
-            user = User.objects.get(username__iexact=self.cleaned_data['username'])
-        except User.DoesNotExist:
-            return self.cleaned_data['username']
-        raise forms.ValidationError(_(u'This username is already taken. Please choose another.'))
+        if User.objects.filter(email__iexact=self.cleaned_data['email']):
+            raise forms.ValidationError(_(u'This email address is already in use. Please supply a different email address.'))
+        return self.cleaned_data['email'].lower()
 
     def clean(self):
-        """
-        Verifiy that the values entered into the two password fields
-        match. Note that an error here will end up in
-        ``non_field_errors()`` because it doesn't apply to a single
-        field.
-        
-        """
         if 'password1' in self.cleaned_data and 'password2' in self.cleaned_data:
             if self.cleaned_data['password1'] != self.cleaned_data['password2']:
                 raise forms.ValidationError(_(u'You must type the same password each time'))
-        return self.cleaned_data
-    
+
+        data = self.cleaned_data
+
+        data['username'] = generateUsername()
+
+        return data
+
     def save(self, profile_callback=None):
         """
         Create the new ``User`` and ``RegistrationProfile``, and
         returns the ``User``.
-        
+
         This is essentially a light wrapper around
         ``RegistrationProfile.objects.create_inactive_user()``,
         feeding it the form data and a profile callback (see the
         documentation on ``create_inactive_user()`` for details) if
         supplied.
-        
+
         """
-        new_user = RegistrationProfile.objects.create_inactive_user(username=self.cleaned_data['username'],
-                                                                    password=self.cleaned_data['password1'],
-                                                                    email=self.cleaned_data['email'],
-                                                                    profile_callback=profile_callback)
+        new_user = RegistrationProfile.objects.create_inactive_user(
+            username=self.cleaned_data['username'],
+            password=self.cleaned_data['password1'],
+            email=self.cleaned_data['email'],
+            profile_callback=profile_callback)
         return new_user
-
-
-class RegistrationFormTermsOfService(RegistrationForm):
-    """
-    Subclass of ``RegistrationForm`` which adds a required checkbox
-    for agreeing to a site's Terms of Service.
-    
-    """
-    tos = forms.BooleanField(widget=forms.CheckboxInput(attrs=attrs_dict),
-                             label=_(u'I have read and agree to the Terms of Service'),
-                             error_messages={ 'required': u"You must agree to the terms to register" })
-
 
 class RegistrationFormUniqueEmail(RegistrationForm):
     """

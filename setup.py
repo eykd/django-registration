@@ -1,4 +1,4 @@
-from distutils.core import setup
+from setuptools import setup
 import os
 
 # Compile the list of packages available, because distutils doesn't have
